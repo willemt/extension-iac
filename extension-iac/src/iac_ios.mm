@@ -18,7 +18,6 @@ struct IAC
     void Clear() {
         m_AppDelegate = 0;
         m_Listener = 0;
-        m_QueueCreated = false;
     }
     dmScript::LuaCallbackInfo*  m_Listener;
 
@@ -27,23 +26,8 @@ struct IAC
     IACInvocation               m_StoredInvocation;
 
     IACCommandQueue             m_CmdQueue;
-    bool                        m_QueueCreated;
 } g_IAC;
 
-static void CreateQueue()
-{
-    if (!g_IAC.m_QueueCreated)
-    {
-        IAC_Queue_Create(&g_IAC.m_CmdQueue);
-        g_IAC.m_QueueCreated = true;
-    }
-}
-
-static void DestroyQueue()
-{
-    IAC_Queue_Destroy(&g_IAC.m_CmdQueue);
-    g_IAC.m_QueueCreated = false;
-}
 
 @interface IACAppDelegate : NSObject <UIApplicationDelegate>
 
@@ -53,6 +37,8 @@ static void DestroyQueue()
 @implementation IACAppDelegate
 
 -(BOOL) application:(UIApplication *)application openURL:(NSURL *)url sourceApplication:(NSString *)sourceApplication annotation:(id)annotation{
+    dmLogError("IAC openURL");
+
     const char* payload = [[url absoluteString] UTF8String];
     const char* origin = sourceApplication ? [sourceApplication UTF8String] : 0;
     IACCommand cmd;
@@ -64,32 +50,45 @@ static void DestroyQueue()
     return YES;
 }
 
+- (BOOL)application:(UIApplication *)application 
+      continueUserActivity:(NSUserActivity *)userActivity 
+        restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
+
+    dmLogError("IAC continueUserActivity");
+
+    if ([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        NSURL *url = userActivity.webpageURL;
+        // Handle the URL appropriately
+        dmLogError("Opened with Universal Link: %@", [url absoluteString]);
+
+        const char* payload = [[url absoluteString] UTF8String];
+        if (payload) {
+            dmLogError("Opened with Universal Link2: %s", payload);
+            IACCommand cmd;
+            cmd.m_Command = IAC_INVOKE;
+            cmd.m_Payload = strdup(payload);
+            cmd.m_Origin = 0;
+            IAC_Queue_Create(&g_IAC.m_CmdQueue);
+            IAC_Queue_Push(&g_IAC.m_CmdQueue, &cmd);
+            // Add your custom handling code here
+        } else {
+            dmLogError("IAC continueUserActivity no payload");
+        }
+    }
+
+    return YES;
+}
 
 - (BOOL)application:(UIApplication *)application willFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Handle invocations launching the app.
-    // willFinishLaunchingWithOptions is called prior to any scripts so we are garuanteed to have this information at any time set_listener is called!
-    const char* origin = 0;
-    const char* payload = 0;
-
-    if (launchOptions[UIApplicationLaunchOptionsSourceApplicationKey]) {
-        origin = [[launchOptions valueForKey:UIApplicationLaunchOptionsSourceApplicationKey] UTF8String];
-    }
-    if (launchOptions[UIApplicationLaunchOptionsURLKey]) {
-        payload = [[[launchOptions valueForKey:UIApplicationLaunchOptionsURLKey] absoluteString] UTF8String];
-    }
-
-    IACCommand cmd;
-    cmd.m_Command = IAC_INVOKE;
-    cmd.m_Payload = payload ? strdup(payload) : 0;
-    cmd.m_Origin = origin ? strdup(origin) : 0;
-
-    if (payload != 0 || origin != 0)
-    {
-        CreateQueue(); // Create the queue if needed
-        IAC_Queue_Push(&g_IAC.m_CmdQueue, &cmd);
-    }
+    dmLogError("IAC willFinishLaunchingWithOptions");
 
     // Return YES prevents OpenURL from being called, we need to do this as other extensions might and therefore internally handle OpenURL also being called.
+    return YES;
+}
+
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    dmLogError("IAC didFinishLaunchingWithOptions");
+
     return YES;
 }
 
@@ -120,8 +119,11 @@ static void OnInvocation(const char* payload, const char *origin)
     lua_State* L = dmScript::GetCallbackLuaContext(iac->m_Listener);
     int top = lua_gettop(L);
 
+    dmLogError("IAC OnInvocation");
+
     if (!dmScript::SetupCallback(iac->m_Listener))
     {
+        dmLogError("IAC OnInvocation: FAILED");
         assert(top == lua_gettop(L));
         return;
     }
@@ -149,6 +151,8 @@ static void OnInvocation(const char* payload, const char *origin)
 int IAC_PlatformSetListener(lua_State* L)
 {
     IAC* iac = &g_IAC;
+
+    dmLogError("IAC IAC_PlatformSetListener");
 
     if (iac->m_Listener)
         dmScript::DestroyCallback(iac->m_Listener);
@@ -179,14 +183,15 @@ static void HandleInvocation(const IACCommand* cmd)
 
 dmExtension::Result AppInitializeIAC(dmExtension::AppParams* params)
 {
-    CreateQueue();
+    dmLogError("IAC AppInitializeIAC");
+    IAC_Queue_Create(&g_IAC.m_CmdQueue);
     return dmExtension::RESULT_OK;
 }
 
 
 dmExtension::Result AppFinalizeIAC(dmExtension::AppParams* params)
 {
-    DestroyQueue();
+    IAC_Queue_Destroy(&g_IAC.m_CmdQueue);
     return dmExtension::RESULT_OK;
 }
 
@@ -208,6 +213,8 @@ dmExtension::Result FinalizeIAC(dmExtension::Params* params)
 
 static void IAC_OnCommand(IACCommand* cmd, void*)
 {
+    dmLogError("IAC IAC_OnCommand");
+
     switch (cmd->m_Command)
     {
     case IAC_INVOKE:
